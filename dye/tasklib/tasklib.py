@@ -74,6 +74,8 @@ def _setup_paths(project_settings, localtasks):
         print "Using Python from %s" % chosen_python
     env.setdefault('python_bin', chosen_python)
 
+    env.setdefault('project_type', project_settings.project_type)
+
 
 def update_git_submodules():
     """If this is a git project then check for submodules and update"""
@@ -157,12 +159,13 @@ def deploy(environment=None):
         if env['verbose']:
             print "Inferred environment as %s" % env['environment']
 
-    create_private_settings()
-    link_local_settings(env['environment'])
     update_git_submodules()
-    update_db()
 
-    collect_static()
+    if env['project_type'] == 'django':
+        create_private_settings()
+        link_local_settings(env['environment'])
+        update_db()
+        collect_static()
 
     if hasattr(env['localtasks'], 'post_deploy'):
         env['localtasks'].post_deploy(env['environment'])
