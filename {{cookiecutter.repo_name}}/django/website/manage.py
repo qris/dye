@@ -27,7 +27,7 @@ if 'IGNORE_DOTVE' not in os.environ and 'VIRTUAL_ENV' not in os.environ:
     updater = ve_mgr.UpdateVE()
     if updater.virtualenv_needs_update():
         print "VirtualEnv needs to be updated"
-        print 'Run "deploy/bootstrap.py'
+        print 'Run deploy/bootstrap.py'
         sys.exit(1)
 
     # now we should enter the virtualenv. We will only get
@@ -45,6 +45,16 @@ if __name__ == "__main__":
         raise ImportError("%s\n\nFailed to import settings module: "
             "does it contain errors? Did you run tasks.py deploy:dev?"
             % e)
+
+    # if using pytest then uncomment the next bit
+#    if 'test' in sys.argv:
+#        import pytest
+#        # We need to remove "test" so that pytest picks up additional args only
+#        sys.argv.pop(1)
+#        pytest.main()
+#    else:
+#        utility = ManagementUtility(argv)
+#        utility.execute()
 
     from django.core.management import execute_from_command_line
     execute_from_command_line(sys.argv)

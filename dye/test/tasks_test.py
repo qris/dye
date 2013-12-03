@@ -6,7 +6,7 @@ import unittest
 # make sure a project_settings is available
 dye_dir = path.join(path.dirname(__file__), os.pardir)
 sys.path.append(dye_dir)
-example_dir = path.join(dye_dir, os.pardir, 'examples', 'deploy')
+example_dir = path.join(dye_dir, os.pardir, '{{cookiecutter.repo_name}}', 'deploy')
 sys.path.append(example_dir)
 
 # import from dye
@@ -16,9 +16,8 @@ import tasks
 class TasksMainTests(unittest.TestCase):
 
     def test_main_h_exits_with_0(self):
-        with self.assertRaises(SystemExit) as cm:
-            tasks.main(['-h'])
-            self.assertEqual(0, cm.exception.code)
+        exit_code = tasks.main(['-h'])
+        self.assertEqual(0, exit_code)
 
 
 class TasksArgumentConversionTests(unittest.TestCase):

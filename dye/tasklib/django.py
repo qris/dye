@@ -4,8 +4,8 @@ import sys
 import random
 import subprocess
 
-from .database import (ensure_user_and_db_exist, create_db_if_not_exists,
-    grant_all_privileges_for_database, _db_table_exists, drop_db)
+from .exceptions import TasksError
+from .database import get_db_manager
 from .exceptions import InvalidProjectError, ShellCommandError
 from .util import _check_call_wrapper
 # global dictionary for state
@@ -53,16 +53,27 @@ def _manage_py(args, cwd=None):
     return output_lines
 
 
-def set_django_db_settings(database='default'):
+def _infer_environment():
+    local_settings = path.join(env['django_settings_dir'], 'local_settings.py')
+    if path.exists(local_settings):
+        return os.readlink(local_settings).split('.')[-1]
+    else:
+        raise TasksError('no environment set, or pre-existing')
+
+
+def _create_db_objects(database='default'):
     """
         Args:
             database (string): The database key to use in the 'DATABASES'
                 configuration. Override from the default to use a different
                 database.
     """
-    from .database import db_details
-    if db_details['engine'] is not None:
+    if 'db' in env:
         return
+    # work out what the environment is if necessary
+    if 'environment' not in env:
+        env['environment'] = _infer_environment()
+
     # import local_settings from the django dir. Here we are adding the django
     # project directory to the path. Note that env['django_dir'] may be more than
     # one directory (eg. 'django/project') which is why we use django_module
@@ -70,6 +81,7 @@ def set_django_db_settings(database='default'):
     import local_settings
 
     default_host = '127.0.0.1'
+    db_details = {}
     # there are two ways of having the settings:
     # either as DATABASE_NAME = 'x', DATABASE_USER ...
     # or as DATABASES = { 'default': { 'NAME': 'xyz' ... } }
@@ -77,9 +89,11 @@ def set_django_db_settings(database='default'):
         db = local_settings.DATABASES[database]
         db_details['engine'] = db['ENGINE']
         db_details['name'] = db['NAME']
-        if not db_details['engine'].endswith('sqlite'):
+        if db_details['engine'].endswith('sqlite3'):
+            db_details['root_dir'] = env['django_dir']
+        else:
             db_details['user'] = db['USER']
-            db_details['pw'] = db['PASSWORD']
+            db_details['password'] = db['PASSWORD']
             db_details['port'] = db.get('PORT', None)
             db_details['host'] = db.get('HOST', default_host)
 
@@ -87,32 +101,32 @@ def set_django_db_settings(database='default'):
         try:
             db_details['engine'] = local_settings.DATABASE_ENGINE
             db_details['name'] = local_settings.DATABASE_NAME
-            if not db_details['engine'].endswith('sqlite'):
+            if db_details['engine'].endswith('sqlite3'):
+                db_details['root_dir'] = env['django_dir']
+            else:
                 db_details['user'] = local_settings.DATABASE_USER
-                db_details['pw'] = local_settings.DATABASE_PASSWORD
+                db_details['password'] = local_settings.DATABASE_PASSWORD
                 db_details['port'] = getattr(local_settings, 'DATABASE_PORT', None)
                 db_details['host'] = getattr(local_settings, 'DATABASE_HOST', default_host)
         except AttributeError:
             # we've failed to find the details we need - give up
             raise InvalidProjectError("Failed to find database settings")
+    # sort out the engine part - discard everything before the last .
+    db_details['engine'] = db_details['engine'].split('.')[-1]
+    if env['environment'] == 'dev_fasttests':
+        db_details['grant_enabled'] = False
+    # and create the objects that hold the db details
+    env['db'] = get_db_manager(**db_details)
+    # and the test db object
+    db_details['name'] = 'test_' + db_details['name']
+    env['test_db'] = get_db_manager(**db_details)
 
 
 def clean_db(database='default'):
     """Delete the database for a clean start"""
-    set_django_db_settings(database=database)
-    from .database import db_details
-    # then see if the database exists
-    if db_details['engine'].endswith('sqlite'):
-        # delete sqlite file
-        if path.isabs(db_details['name']):
-            db_path = db_details['name']
-        else:
-            db_path = path.abspath(path.join(env['django_dir'], db_details['name']))
-        os.remove(db_path)
-    elif db_details['engine'].endswith('mysql'):
-        # DROP DATABASE
-        drop_db(db_details['name'])
-        drop_db('test_' + db_details['name'])
+    _create_db_objects(database=database)
+    env['db'].drop_db()
+    env['test_db'].drop_db()
 
 
 def _get_cache_table():
@@ -126,54 +140,61 @@ def _get_cache_table():
     return settings.CACHES['default']['LOCATION']
 
 
-def update_db(syncdb=True, drop_test_db=True, force_use_migrations=False, database='default'):
+def update_db(syncdb=True, drop_test_db=True, force_use_migrations=True, database='default'):
     """ create the database, and do syncdb and migrations
     Note that if syncdb is true, then migrations will always be done if one of
     the Django apps has a directory called 'migrations/'
     Args:
         syncdb (bool): whether to run syncdb (aswell as creating database)
         drop_test_db (bool): whether to drop the test database after creation
-        force_use_migrations (bool): whether to force migrations, even when no
-            migrations/ directories are found.
+        force_use_migrations (bool): always True now
         database (string): The database value passed to _get_django_db_settings.
     """
     if not env['quiet']:
         print "### Creating and updating the databases"
 
-    set_django_db_settings(database=database)
-    from .database import db_details
-    if env['environment'] != 'dev_fasttests':
-        db_details['grant_enabled'] = False
+    _create_db_objects(database=database)
 
     # then see if the database exists
-    if db_details['engine'].endswith('mysql'):
-        ensure_user_and_db_exist()
-        test_db = 'test_' + db_details['name']
-        if not drop_test_db:
-            create_db_if_not_exists(test_db)
-        grant_all_privileges_for_database(test_db)
+    env['db'].ensure_user_and_db_exist()
+    if not drop_test_db:
+        env['test_db'].create_db_if_not_exists()
+    env['test_db'].grant_all_privileges_for_database()
 
-    #print 'syncdb: %s' % type(syncdb)
-    use_migrations = force_use_migrations
     if env['project_type'] == "django" and syncdb:
         # if we are using the database cache we need to create the table
         # and we need to do it before syncdb
         cache_table = _get_cache_table()
-        if cache_table and not _db_table_exists(cache_table):
+        if cache_table and not env['db'].test_db_table_exists(cache_table):
             _manage_py(['createcachetable', cache_table])
-        # if we are using South we need to do the migrations aswell
-        for app in env['django_apps']:
-            if path.exists(path.join(env['django_dir'], app, 'migrations')):
-                use_migrations = True
         _manage_py(['syncdb', '--noinput'])
-        if use_migrations:
-            _manage_py(['migrate', '--noinput'])
+        # always call migrate - shouldn't fail (I think)
+        _manage_py(['migrate', '--noinput'])
 
 
 def create_test_db(drop_after_create=True, database='default'):
-    set_django_db_settings(database=database)
-    from .database import db_details
-    create_db_if_not_exists('test_' + db_details['name'], drop_after_create=drop_after_create)
+    _create_db_objects(database=database)
+    env['test_db'].create_db_if_not_exists(drop_after_create=drop_after_create)
+
+
+def dump_db(dump_filename='db_dump.sql', for_rsync=False, database='default'):
+    _create_db_objects(database=database)
+    env['db'].dump_db(dump_filename, for_rsync)
+
+
+def restore_db(dump_filename='db_dump.sql', database='default'):
+    _create_db_objects(database=database)
+    env['db'].restore_db(dump_filename)
+
+
+def create_dbdump_cron_file(cron_file, dump_file_stub, database='default'):
+    _create_db_objects(database=database)
+    env['db'].create_dbdump_cron_file(cron_file, dump_file_stub)
+
+
+def setup_db_dumps(dump_dir, database='default'):
+    _create_db_objects(database=database)
+    env['db'].setup_db_dumps(dump_dir)
 
 
 def link_local_settings(environment):

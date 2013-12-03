@@ -22,10 +22,9 @@ import os
 from os import path
 import sys
 
-from .exceptions import TasksError
 from .django import (collect_static, create_private_settings,
         _install_django_jenkins, link_local_settings, _manage_py,
-        _manage_py_jenkins, clean_db, update_db)
+        _manage_py_jenkins, clean_db, update_db, _infer_environment)
 from .util import _check_call_wrapper, _call_wrapper, _rm_all_pyc
 # this is a global dictionary
 from .environment import env
@@ -75,6 +74,8 @@ def _setup_paths(project_settings, localtasks):
         print "Using Python from %s" % chosen_python
     env.setdefault('python_bin', chosen_python)
 
+    env.setdefault('project_type', project_settings.project_type)
+
 
 def update_git_submodules():
     """If this is a git project then check for submodules and update"""
@@ -101,7 +102,7 @@ def run_tests(*extra_args):
     if not env['quiet']:
         print "### Running tests"
 
-    args = ['test', '-v0']
+    args = ['test', '--noinput', '-v0']
 
     if extra_args:
         args += extra_args
@@ -149,14 +150,6 @@ def run_jenkins():
     _manage_py_jenkins()
 
 
-def _infer_environment():
-    local_settings = path.join(env['django_settings_dir'], 'local_settings.py')
-    if path.exists(local_settings):
-        return os.readlink(local_settings).split('.')[-1]
-    else:
-        raise TasksError('no environment set, or pre-existing')
-
-
 def deploy(environment=None):
     """Do all the required steps in order"""
     if environment:
@@ -166,12 +159,12 @@ def deploy(environment=None):
         if env['verbose']:
             print "Inferred environment as %s" % env['environment']
 
-    create_private_settings()
-    link_local_settings(env['environment'])
     update_git_submodules()
 
     if env['project_type'] == 'django':
         # these tasks currently require django settings to run
+        create_private_settings()
+        link_local_settings(env['environment'])
         update_db()
         collect_static()
 

@@ -3,6 +3,8 @@ from os import path
 import sys
 import StringIO
 import unittest
+import sqlite3
+import subprocess
 import MySQLdb
 
 dye_dir = path.join(path.dirname(__file__), os.pardir)
@@ -18,27 +20,89 @@ tasklib.env['quiet'] = True
 mysql_root_password = None
 
 
+class TestSqliteManager(unittest.TestCase):
+    TEST_DB = 'dyedb'
+    TEST_TABLE = 'dyetable'
+
+    def setUp(self):
+        self.db = database.get_db_manager(
+            engine='sqlite',
+            name=self.TEST_DB,
+            root_dir='.',
+        )
+        super(TestSqliteManager, self).setUp()
+
+    def tearDown(self):
+        self.db.drop_db()
+
+    def create_db(self):
+        conn = sqlite3.connect(self.db.file_path)
+        conn.close()
+        # check this has done what we expect
+        self.assertTrue(path.exists(self.db.file_path))
+
+    def create_table(self):
+        conn = sqlite3.connect(self.db.file_path)
+        conn.execute("CREATE TABLE %s (mycolumn CHAR(30))" % self.TEST_TABLE)
+
+    def test_drop_db_deletes_db_file(self):
+        self.create_db()
+        self.db.drop_db()
+        self.assertFalse(path.exists(self.db.file_path))
+
+    def test_drop_db_doesnt_give_error_when_db_doesnt_exist(self):
+        # check our assumptions are correct
+        self.assertFalse(path.exists(self.db.file_path))
+        try:
+            self.db.drop_db()
+        except Exception as e:
+            self.fail(
+                'Exception %s thrown by sqlite drop_db() when no db file present'
+                % e)
+
+    def test_test_db_table_exists_returns_false_when_table_not_present(self):
+        self.create_db()
+        self.assertFalse(self.db.test_db_table_exists('testtable'))
+
+    def test_test_db_table_exists_returns_false_when_table_present(self):
+        self.create_db()
+        self.create_table()
+        self.assertTrue(self.db.test_db_table_exists(self.TEST_TABLE))
+
+
+class TestSqlite3Manager(unittest.TestCase):
+
+    def setUp(self):
+        super(TestSqlite3Manager, self).setUp()
+        # override the database and then run the same tests
+        self.db = database.get_db_manager(
+            engine='sqlite3',
+            name=self.TEST_DB,
+            root_dir='.',
+        )
+
+
 class MysqlMixin(object):
 
     TEST_USER = 'dye_user'
     TEST_PASSWORD = 'dye_password'
     TEST_DB = 'dyedb'
     TEST_TABLE = 'dyetable'
+    TEST_RESTORE_FILE = path.join(path.dirname(__file__), 'data', 'testrestore.sql')
+    TEST_DUMP_FILE = path.join(path.dirname(__file__), 'data', 'testdump.sql')
 
-    def set_default_db_details(self):
-        database.db_details = {
-            'engine': 'mysql',
-            'name': 'dyedb',
-            'user': 'dye_user',
-            'password': 'dye_password',
-            'port': None,
-            'host': None,
-            'root_password': 'root_pw',
-            'grant_enabled': True,
-        }
-
-    def reset_db_details(self):
-        database._reset_db_details()
+    def setUp(self):
+        self.db = database.get_db_manager(
+            engine='mysql',
+            name=self.TEST_DB,
+            user=self.TEST_USER,
+            password=self.TEST_PASSWORD,
+            port=None,
+            host=None,
+            root_password=None,
+            grant_enabled=True,
+        )
+        super(MysqlMixin, self).setUp()
 
     def get_mysql_root_password(self):
         """Use the global mysql_root_password as a cache, so we only need to
@@ -48,162 +112,176 @@ class MysqlMixin(object):
         global mysql_root_password
         if mysql_root_password is None:
             # this caches the root password in a global in database
-            mysql_root_password = database._get_mysql_root_password()
+            mysql_root_password = self.db.get_root_password()
         else:
             # if we've saved it, poke it into the database global
             # then it can be used without us having to pass it in ourselves
-            database.db_details['root_password'] = mysql_root_password
+            self.db.root_password = mysql_root_password
         return mysql_root_password
 
     def drop_database_user(self):
         self.get_mysql_root_password()
-        if database._test_mysql_user_exists(self.TEST_USER):
-            database._mysql_exec_as_root("DROP USER '%s'@'localhost'" % self.TEST_USER)
+        if self.db.test_sql_user_exists():
+            self.db.exec_as_root("DROP USER '%s'@'localhost'" % self.TEST_USER)
 
     def create_database_user(self):
         self.get_mysql_root_password()
         self.drop_database_user()
-        database._mysql_exec_as_root(
+        self.db.exec_as_root(
             "CREATE USER '%s'@'localhost' IDENTIFIED BY '%s'" %
             (self.TEST_USER, self.TEST_PASSWORD))
 
     def drop_database(self):
         self.get_mysql_root_password()
-        if database._db_exists(self.TEST_DB):
-            database._mysql_exec_as_root("DROP DATABASE %s" % self.TEST_DB)
+        if self.db.db_exists():
+            self.db.exec_as_root("DROP DATABASE %s" % self.TEST_DB)
 
     def create_database(self):
         self.get_mysql_root_password()
         self.drop_database()
-        database._mysql_exec_as_root("CREATE DATABASE %s CHARACTER SET utf8" % self.TEST_DB)
+        self.db.exec_as_root("CREATE DATABASE %s CHARACTER SET utf8" % self.TEST_DB)
 
     def create_table(self):
         self.get_mysql_root_password()
-        database._mysql_exec_as_root("CREATE TABLE %s.%s(mycolumn CHAR(30))" %
-                                     (self.TEST_DB, self.TEST_TABLE))
+        self.db.exec_as_root("CREATE TABLE %s.%s(mycolumn CHAR(30))" %
+                             (self.TEST_DB, self.TEST_TABLE))
 
     def grant_privileges(self):
         self.get_mysql_root_password()
-        database._mysql_exec_as_root(
+        self.db.exec_as_root(
             "GRANT ALL PRIVILEGES ON %s.* TO '%s'@'localhost'" %
             (self.TEST_DB, self.TEST_USER))
-        database._mysql_exec_as_root("FLUSH PRIVILEGES")
+        self.db.exec_as_root("FLUSH PRIVILEGES")
 
     def assert_user_has_access_to_database(self):
         try:
-            db_conn = database._create_db_connection(
-                user=self.TEST_USER,
-                passwd=self.TEST_PASSWORD,
-                db=self.TEST_DB,
-            )
+            db_conn = self.db.create_db_connection(user=self.TEST_USER,
+                                                   passwd=self.TEST_PASSWORD,
+                                                   db=self.TEST_DB)
         except MySQLdb.OperationalError as e:
-            self.fail("Failed to connect to database after privileges"
-                      "should be granted.\n%s" % e)
+            self.fail("Failed to connect to database after privileges "
+                      "should have been granted.\n%s" % e)
         db_conn.close()
+
+
+class TestDatabaseInit(MysqlMixin, unittest.TestCase):
+
+    def get_db_kwargs(self, host):
+        return {
+            'engine': 'mysql',
+            'name': self.TEST_DB,
+            'user': self.TEST_USER,
+            'password': self.TEST_PASSWORD,
+            'port': None,
+            'host': host,
+            'root_password': None,
+            'grant_enabled': True,
+        }
+
+    def test_host_set_to_localhost_if_none_passed(self):
+        db = database.get_db_manager(**self.get_db_kwargs(None))
+        self.assertEqual('localhost', db.host)
+
+    def test_host_set_to_localhost_if_empty_string_passed(self):
+        db = database.get_db_manager(**self.get_db_kwargs(''))
+        self.assertEqual('localhost', db.host)
+
+    def test_host_set_to_ip_address_if_ip_address_passed(self):
+        db = database.get_db_manager(**self.get_db_kwargs('12.34.56.78'))
+        self.assertEqual('12.34.56.78', db.host)
 
 
 class TestCreateMysqlArgs(MysqlMixin, unittest.TestCase):
 
-    def setUp(self):
-        self.set_default_db_details()
+    def test_create_cmdline_args_simple_case(self):
+        sql_args = self.db.create_cmdline_args()
+        expected_args = ['-u', 'dye_user', '-pdye_password', '--host=localhost', 'dyedb']
+        self.assertSequenceEqual(expected_args, sql_args)
 
-    def tearDown(self):
-        self.reset_db_details()
-
-    def test_create_mysql_args_simple_case(self):
-        mysql_args = database._create_mysql_args()
-        expected_args = ['-u', 'dye_user', '-pdye_password', 'dyedb']
-        self.assertSequenceEqual(expected_args, mysql_args)
-
-    def test_create_mysql_args_with_host(self):
-        database.db_details['host'] = 'dbserver.com'
-        mysql_args = database._create_mysql_args()
+    def test_create_cmdline_args_with_host(self):
+        self.db.host = 'dbserver.com'
+        sql_args = self.db.create_cmdline_args()
         expected_args = ['-u', 'dye_user', '-pdye_password', '--host=dbserver.com', 'dyedb']
-        self.assertSequenceEqual(expected_args, mysql_args)
+        self.assertSequenceEqual(expected_args, sql_args)
 
-    def test_create_mysql_args_with_port(self):
-        database.db_details['port'] = 3333
-        mysql_args = database._create_mysql_args()
-        expected_args = ['-u', 'dye_user', '-pdye_password', '--port=3333', 'dyedb']
-        self.assertSequenceEqual(expected_args, mysql_args)
+    def test_create_cmdline_args_with_port(self):
+        self.db.port = 3333
+        sql_args = self.db.create_cmdline_args()
+        expected_args = ['-u', 'dye_user', '-pdye_password', '--host=localhost', '--port=3333', 'dyedb']
+        self.assertSequenceEqual(expected_args, sql_args)
 
-    def test_create_mysql_args_with_setting_database_name(self):
-        mysql_args = database._create_mysql_args(db_name='mydb')
-        expected_args = ['-u', 'dye_user', '-pdye_password', 'mydb']
-        self.assertSequenceEqual(expected_args, mysql_args)
+    def test_create_cmdline_args_with_setting_database_name(self):
+        self.db.name = 'mydb'
+        sql_args = self.db.create_cmdline_args()
+        expected_args = ['-u', 'dye_user', '-pdye_password', '--host=localhost', 'mydb']
+        self.assertSequenceEqual(expected_args, sql_args)
 
 
 class TestDatabaseTestFunctions(MysqlMixin, unittest.TestCase):
 
-    def test_test_mysql_user_exists_return_false_when_user_doesnt_exist(self):
-        self.assertFalse(database._test_mysql_user_exists(user=self.TEST_USER))
+    def test_test_sql_user_exists_return_false_when_user_doesnt_exist(self):
+        self.assertFalse(self.db.test_sql_user_exists())
 
-    def test_test_mysql_user_exists_return_true_when_user_does_exist(self):
+    def test_test_sql_user_exists_return_true_when_user_does_exist(self):
         self.create_database_user()
         try:
-            self.assertTrue(database._test_mysql_user_exists(user=self.TEST_USER))
+            self.assertTrue(self.db.test_sql_user_exists())
         finally:
             self.drop_database_user()
 
-    def test_test_mysql_user_password_works_returns_false_when_user_doesnt_exist(self):
-        self.assertFalse(database._test_mysql_user_password_works(
-            user=self.TEST_USER, password=self.TEST_PASSWORD))
+    def test_test_sql_user_password_returns_false_when_user_doesnt_exist(self):
+        self.assertFalse(self.db.test_sql_user_password())
 
-    def test_test_mysql_user_password_works_returns_false_when_user_exists_but_password_wrong(self):
+    def test_test_sql_user_password_returns_false_when_user_exists_but_password_wrong(self):
         self.create_database_user()
         try:
-            self.assertFalse(database._test_mysql_user_password_works(
+            self.assertFalse(self.db.test_sql_user_password(
                 user=self.TEST_USER, password='wrong_password'))
         finally:
             self.drop_database_user()
 
-    def test_test_mysql_user_password_works_returns_true_when_user_exists(self):
+    def test_test_sql_user_password_returns_true_when_user_exists(self):
         self.create_database_user()
         try:
-            self.assertTrue(database._test_mysql_user_password_works(
-                user=self.TEST_USER, password=self.TEST_PASSWORD))
+            self.assertTrue(self.db.test_sql_user_password())
         finally:
             self.drop_database_user()
 
-    def test_test_mysql_root_password_returns_true_when_password_works(self):
+    def test_test_root_password_returns_true_when_password_works(self):
         password = self.get_mysql_root_password()
-        self.assertTrue(database._test_mysql_root_password(password))
+        self.assertTrue(self.db.test_root_password(password))
 
-    def test_test_mysql_root_password_returns_false_when_password_is_wrong(self):
-        self.assertFalse(database._test_mysql_root_password('wrong_password'))
+    def test_test_root_password_returns_false_when_password_is_wrong(self):
+        self.assertFalse(self.db.test_root_password('wrong_password'))
 
     def test_db_exists_returns_false_when_database_doesnt_exist(self):
-        self.assertFalse(database._db_exists(self.TEST_DB))
+        self.assertFalse(self.db.db_exists())
 
     def test_db_exists_returns_true_when_database_exists(self):
         self.create_database()
         try:
-            self.assertTrue(database._db_exists(self.TEST_DB))
+            self.assertTrue(self.db.db_exists())
         finally:
             self.drop_database()
 
-    def test_db_table_exists_returns_true_when_table_exists(self):
+    def test_test_db_table_exists_returns_true_when_table_exists(self):
         self.create_database_user()
         self.create_database()
         self.grant_privileges()
         self.create_table()
-        self.set_default_db_details()
         try:
-            self.assertTrue(database._db_table_exists(self.TEST_TABLE))
+            self.assertTrue(self.db.test_db_table_exists(self.TEST_TABLE))
         finally:
-            self.reset_db_details()
             self.drop_database()
             self.drop_database_user()
 
-    def test_db_table_exists_returns_false_when_table_doesnt_exist(self):
+    def test_test_db_table_exists_returns_false_when_table_doesnt_exist(self):
         self.create_database_user()
         self.create_database()
         self.grant_privileges()
-        self.set_default_db_details()
         try:
-            self.assertFalse(database._db_table_exists(self.TEST_TABLE))
+            self.assertFalse(self.db.test_db_table_exists(self.TEST_TABLE))
         finally:
-            self.reset_db_details()
             self.drop_database()
             self.drop_database_user()
 
@@ -212,25 +290,26 @@ class TestDatabaseCreateFunctions(MysqlMixin, unittest.TestCase):
 
     def test_create_user_if_not_exists_creates_user_if_user_doesnt_exist(self):
         try:
-            database._create_user_if_not_exists(user=self.TEST_USER, password=self.TEST_PASSWORD)
-            self.assertTrue(database._test_mysql_user_exists(user=self.TEST_USER))
+            self.db.create_user_if_not_exists()
+            self.assertTrue(self.db.test_sql_user_exists())
         finally:
             self.drop_database_user()
 
     def test_create_user_if_not_exists_doesnt_raise_exception_if_user_exists(self):
         self.create_database_user()
         try:
-            database._create_user_if_not_exists(user=self.TEST_USER, password=self.TEST_PASSWORD)
-            self.assertTrue(database._test_mysql_user_exists(user=self.TEST_USER))
+            self.db.create_user_if_not_exists()
+            self.assertTrue(self.db.test_sql_user_exists())
         finally:
             self.drop_database_user()
 
     def test_set_user_password_changes_user_password(self):
         self.create_database_user()
         try:
-            database._set_user_password(user=self.TEST_USER, password='new_password')
-            self.assertTrue(database._test_mysql_user_password_works(
-                user=self.TEST_USER, password='new_password'))
+            self.db.password = 'new_password'
+            self.db.set_user_password()
+            self.assertTrue(self.db.test_sql_user_password(
+                password='new_password'))
         finally:
             self.drop_database_user()
 
@@ -238,24 +317,23 @@ class TestDatabaseCreateFunctions(MysqlMixin, unittest.TestCase):
         self.create_database_user()
         self.create_database()
         try:
-            database.grant_all_privileges_for_database(
-                db_name=self.TEST_DB, user=self.TEST_USER)
+            self.db.grant_all_privileges_for_database()
             self.assert_user_has_access_to_database()
         finally:
             self.drop_database()
             self.drop_database_user()
 
     def test_create_db_if_not_exists_creates_db_when_db_does_not_exist(self):
-        database.create_db_if_not_exists(db_name=self.TEST_DB)
+        self.db.create_db_if_not_exists()
         try:
-            self.assertTrue(database._db_exists(db_name=self.TEST_DB))
+            self.assertTrue(self.db.db_exists())
         finally:
             self.drop_database()
 
     def test_create_db_if_not_exists_creates_db_does_not_cause_error_when_db_does_exist(self):
         self.create_database()
         try:
-            database.create_db_if_not_exists(db_name=self.TEST_DB)
+            self.db.create_db_if_not_exists()
         except Exception as e:
             self.fail('create_db_if_not_exists() raised exception: %s' % e)
         finally:
@@ -263,9 +341,7 @@ class TestDatabaseCreateFunctions(MysqlMixin, unittest.TestCase):
 
     def test_ensure_user_and_db_exist_creates_user_and_db_when_they_dont_exist(self):
         try:
-            database.ensure_user_and_db_exist(
-                user=self.TEST_USER, password=self.TEST_PASSWORD,
-                db_name=self.TEST_DB)
+            self.db.ensure_user_and_db_exist()
             self.assert_user_has_access_to_database()
         finally:
             self.drop_database_user()
@@ -276,9 +352,7 @@ class TestDatabaseCreateFunctions(MysqlMixin, unittest.TestCase):
         self.create_database()
         self.grant_privileges()
         try:
-            database.ensure_user_and_db_exist(
-                user=self.TEST_USER, password=self.TEST_PASSWORD,
-                db_name=self.TEST_DB)
+            self.db.ensure_user_and_db_exist()
         except Exception as e:
             self.fail('ensure_user_and_db_exist() raised exception: %s' % e)
         finally:
@@ -287,36 +361,51 @@ class TestDatabaseCreateFunctions(MysqlMixin, unittest.TestCase):
 
     def test_drop_db_does_drop_database(self):
         self.create_database()
-        database.drop_db(db_name=self.TEST_DB)
-        self.assertFalse(database._db_exists(db_name=self.TEST_DB))
+        self.db.drop_db()
+        self.assertFalse(self.db.db_exists())
 
     def test_drop_db_doesnt_cause_error_when_db_doesnt_exist(self):
         try:
-            database.drop_db(db_name=self.TEST_DB)
+            self.db.drop_db()
         except Exception as e:
             self.fail('drop_db() raised exception: %s' % e)
 
-    # dump db
+    def test_restore_db_causes_db_and_table_to_be_created(self):
+        try:
+            self.db.ensure_user_and_db_exist()
+            self.db.restore_db(self.TEST_RESTORE_FILE)
+            self.assertTrue(self.db.test_db_table_exists(self.TEST_TABLE))
+        finally:
+            self.drop_database_user()
+            self.drop_database()
 
-    # restore db
+    def test_dump_db_generates_dump_similar_to_what_was_loaded(self):
+        try:
+            self.db.ensure_user_and_db_exist()
+            self.db.restore_db(self.TEST_RESTORE_FILE)
+            self.db.dump_db(self.TEST_DUMP_FILE)
+            # do a diff but ignore comments that may contain date stamps
+            # may also need to add '--ignore-matching-lines', '^/\*',
+            # to allow for non-data bits
+            subprocess.check_call(['diff', '--ignore-matching-lines', '^--',
+                                   self.TEST_RESTORE_FILE, self.TEST_DUMP_FILE])
+        finally:
+            self.drop_database_user()
+            self.drop_database()
+            os.remove(self.TEST_DUMP_FILE)
 
 
 class TestMysqlDumpCron(MysqlMixin, unittest.TestCase):
 
-    def setUp(self):
-        self.set_default_db_details()
-
-    def tearDown(self):
-        self.reset_db_details()
-
-    def test_create_mysqldump_cron_file_writes_correct_output(self):
+    def test_create_dbdump_cron_file_writes_correct_output(self):
         dump_file_stub = '/var/dumps/dye-'
         output_file = StringIO.StringIO()
-        database._create_mysqldump_cron_file(output_file, dump_file_stub)
+        self.db.create_dbdump_cron_file(output_file, dump_file_stub)
         actual_output = output_file.getvalue()
         expected_output = \
             "#!/bin/sh\n" \
-            "/usr/bin/mysqldump -u dye_user -pdye_password dyedb > /var/dumps/dye-`/bin/date +\%d`.sql\n"
+            "/usr/bin/mysqldump -u dye_user -pdye_password " \
+            "--host=localhost dyedb > /var/dumps/dye-`/bin/date +\%d`.sql\n"
         self.assertEqual(expected_output, actual_output)
 
 
