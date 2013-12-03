@@ -169,9 +169,11 @@ def deploy(environment=None):
     create_private_settings()
     link_local_settings(env['environment'])
     update_git_submodules()
-    update_db()
 
-    collect_static()
+    if env['project_type'] == 'django':
+        # these tasks currently require django settings to run
+        update_db()
+        collect_static()
 
     if hasattr(env['localtasks'], 'post_deploy'):
         env['localtasks'].post_deploy(env['environment'])

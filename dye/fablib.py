@@ -145,7 +145,9 @@ def deploy(revision=None, keep=None):
     _create_dir_if_not_exists(env.server_project_home)
 
     if files.exists(env.vcs_root_dir):
-        create_copy_for_rollback(keep)
+        if env.project_type == "django":
+            # this currently requires django settings to run
+            create_copy_for_rollback(keep)
 
     # we only have to disable this site after creating the rollback copy
     # (do this so that apache carries on serving other sites on this server
