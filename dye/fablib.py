@@ -386,9 +386,9 @@ def point_current_to_next():
 
 
 def _dump_db_in_directory(dump_dir):
-    require('django_settings_dir', provided_by=env.valid_envs)
     if (env.project_type == 'django' and
             files.exists(path.join(env.django_settings_dir, 'local_settings.py'))):
+        require('django_settings_dir', provided_by=env.valid_envs)
         # dump database (provided local_settings has been set up properly)
         with cd(dump_dir):
             # just in case there is some other reason why the dump fails
