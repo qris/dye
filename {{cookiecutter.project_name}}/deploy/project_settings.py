@@ -66,6 +66,9 @@ local_requirements_file = path.join(local_deploy_dir, 'pip_packages.txt')
 
 test_cmd = ' manage.py test -v0 ' + ' '.join(django_apps)
 
+# django jenkins version - latest might require a too new version of django
+#django_jenkins_version = '0.14.0'  # compatible with Django 1.5
+
 # servers, for use by fabric
 
 # production server - if commented out then the production task will abort
@@ -94,6 +97,11 @@ server_project_home = path.join(server_home, project_name)
 
 # which web server to use (or None)
 webserver = 'apache'
+
+import socket
+
+if socket.getfqdn().endswith('.fen.aptivate.org'):
+    pypi_cache_url = 'http://fen-vz-pypicache.fen.aptivate.org/simple'
 
 ###################################################
 # OPTIONAL SETTINGS FOR FABRIC - will be put in env

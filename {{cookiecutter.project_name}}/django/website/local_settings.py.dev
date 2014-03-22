@@ -1,13 +1,19 @@
 import private_settings
+import sys
 
 DEBUG = True
 TEMPLATE_DEBUG = DEBUG
+
+# used in admin template so we know which site we're looking at
+DEPLOY_ENV = "localdev"
+DEPLOY_ENV_NAME = "Local dev copy"
+DEPLOY_ENV_COLOR = '#ff9900'  # orange
 
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',  # Add 'postgresql_psycopg2', 'postgresql', 'mysql', 'sqlite3' or 'oracle'.
         'NAME': '{{ cookiecutter.project_name }}',                      # Or path to database file if using sqlite3.
-        'USER': '{{ cookiecutter.project_name }}',                      # Not used with sqlite3.
+        'USER': '{{ cookiecutter.project_name|truncate(16, True, "") }}',                      # Not used with sqlite3.
         'PASSWORD': private_settings.DB_PASSWORD,                  # Not used with sqlite3.
         'HOST': '',                      # Set to empty string for localhost. Not used with sqlite3.
         'PORT': '',                      # Set to empty string for default. Not used with sqlite3.
