@@ -161,7 +161,7 @@ def deploy(environment=None):
 
     update_git_submodules()
 
-    if env['project_type'] == 'django':
+    if env['project_type'] in ('django', 'cms'):
         # these tasks currently require django settings to run
         create_private_settings()
         link_local_settings(env['environment'])
