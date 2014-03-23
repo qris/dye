@@ -418,8 +418,6 @@ def point_current_to_next():
 
 
 def _dump_db_in_directory(dump_dir):
-    require('django_settings_dir', 'project_type', provided_by=env.valid_envs)
-
     if (env.project_type == 'django' and
             files.exists(path.join(env.django_settings_dir, 'local_settings.py'))):
         require('django_settings_dir', provided_by=env.valid_envs)
