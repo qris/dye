@@ -51,6 +51,9 @@ def _setup_paths(project_settings):
     copy_setting('host', env.hosts[0])
     copy_setting('webserver', None)
 
+    # If it's a Python project, but not Django, it might still need a virtualenv.
+    copy_setting('relative_ve_dir', None)
+
     if env.project_type == "django":
         copy_setting('relative_django_dir', env.project_name)
         copy_setting('relative_django_settings_dir', env['relative_django_dir'])
