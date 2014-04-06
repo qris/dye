@@ -99,6 +99,7 @@ STATICFILES_DIRS = (
 STATICFILES_FINDERS = (
     'django.contrib.staticfiles.finders.FileSystemFinder',
     'django.contrib.staticfiles.finders.AppDirectoriesFinder',
+    'django_assets.finders.AssetsFinder',
 )
 ########## END STATIC FILE CONFIGURATION
 
@@ -130,6 +131,7 @@ THIRD_PARTY_APPS = (
     'easy_thumbnails',
     'registration',
     'haystack',
+    'django_assets',
     #{% endif %}
     #{% if cookiecutter.django_type == "cms" %}
     'cms',
